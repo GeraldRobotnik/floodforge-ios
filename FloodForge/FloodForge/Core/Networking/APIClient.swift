@@ -48,7 +48,23 @@ final class APIClient {
 extension JSONDecoder {
     static var floodforge: JSONDecoder {
         let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
+
+        // Robust ISO-8601 for "2025-12-31T12:23:42Z" AND "2025-12-31T12:23:42.837292Z"
+        d.dateDecodingStrategy = .custom { decoder in
+            let c = try decoder.singleValueContainer()
+            let s = try c.decode(String.self)
+
+            let f1 = ISO8601DateFormatter()
+            f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let dt = f1.date(from: s) { return dt }
+
+            let f2 = ISO8601DateFormatter()
+            f2.formatOptions = [.withInternetDateTime]
+            if let dt = f2.date(from: s) { return dt }
+
+            throw DecodingError.dataCorruptedError(in: c, debugDescription: "Invalid ISO8601 date: \(s)")
+        }
+
         return d
     }
 }

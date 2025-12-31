@@ -1,10 +1,3 @@
-//
-//  SitesView.swift
-//  FloodForge
-//
-//  Created by Mark Basaldua on 12/31/25.
-//
-
 import SwiftUI
 
 struct SitesView: View {
@@ -14,75 +7,273 @@ struct SitesView: View {
         NavigationStack {
             Group {
                 if let error = vm.error {
-                    ContentUnavailableView("Error", systemImage: "exclamationmark.triangle", description: Text(error))
+                    ContentUnavailableView(
+                        "Error",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(error)
+                    )
+                    .padding(.top, 16)
                 } else if vm.sites.isEmpty && vm.isLoading {
                     ProgressView("Loading…")
-                } else if vm.sites.isEmpty {
-                    ContentUnavailableView("No sites", systemImage: "drop", description: Text("No data returned."))
+                        .padding(.top, 24)
+                } else if vm.filteredSites.isEmpty {
+                    ContentUnavailableView(
+                        "No sites",
+                        systemImage: "drop",
+                        description: Text(vm.emptyStateMessage)
+                    )
+                    .padding(.top, 16)
                 } else {
-                    List(vm.sites) { s in
-                        NavigationLink(value: s) {
-                            HStack(spacing: 12) {
-                                StatusBadge(status: s.status)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(s.name).font(.headline)
-                                    Text("LOW: \(s.lowTriggered ? "TRIPPED" : "OK") • HIGH: \(s.highTriggered ? "TRIPPED" : "OK")")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Text(s.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.caption)
+                    List {
+                        // Top status bar (last refresh + count)
+                        Section {
+                            HStack(spacing: 10) {
+                                Label(vm.refreshSummary, systemImage: "arrow.clockwise")
                                     .foregroundStyle(.secondary)
+                                Spacer()
+                                Text("\(vm.filteredSites.count) shown")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .font(.footnote)
+                        }
+
+                        // Favorites section
+                        if !vm.favoriteSites.isEmpty {
+                            Section("Favorites") {
+                                ForEach(vm.favoriteSites) { s in
+                                    siteRow(s)
+                                }
+                            }
+                        }
+
+                        // All / filtered section
+                        Section(vm.favoriteSites.isEmpty ? "Sites" : "All Sites") {
+                            ForEach(vm.nonFavoriteSites) { s in
+                                siteRow(s)
                             }
                         }
                     }
+                    .listStyle(.insetGrouped)
                     .refreshable { await vm.refresh() }
                 }
             }
             .navigationTitle("Sites")
             .navigationDestination(for: SiteNode.self) { s in
-                SiteDetailView(site: s)
+                SiteDetailView(site: s, isFavorite: vm.isFavorite(s.id)) {
+                    vm.toggleFavorite(s.id)
+                }
             }
-            .task { await vm.refresh() }
+            .searchable(text: $vm.query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search sites")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("Filter", selection: $vm.filter) {
+                            ForEach(SiteFilter.allCases) { f in
+                                Text(f.title).tag(f)
+                            }
+                        }
+                        Toggle("Favorites only", isOn: $vm.favoritesOnly)
+                    } label: {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                    }
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await vm.refresh() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(vm.isLoading)
+                }
+            }
+            .task { await vm.onAppear() }
+        }
+    }
+
+    @ViewBuilder
+    private func siteRow(_ s: SiteNode) -> some View {
+        NavigationLink(value: s) {
+            SiteCardRow(
+                site: s,
+                isFavorite: vm.isFavorite(s.id),
+                onToggleFavorite: { vm.toggleFavorite(s.id) }
+            )
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button {
+                vm.toggleFavorite(s.id)
+            } label: {
+                Label(vm.isFavorite(s.id) ? "Unfavorite" : "Favorite",
+                      systemImage: vm.isFavorite(s.id) ? "star.slash" : "star")
+            }
+            .tint(.yellow)
         }
     }
 }
 
-struct StatusBadge: View {
-    let status: AlertStatus
+// MARK: - Row UI (status-forward)
+
+private struct SiteCardRow: View {
+    let site: SiteNode
+    let isFavorite: Bool
+    let onToggleFavorite: () -> Void
+
     var body: some View {
-        Text(status.rawValue)
-            .font(.caption).bold()
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(.thinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+        HStack(spacing: 12) {
+            // Left status rail
+            RoundedRectangle(cornerRadius: 3)
+                .fill(site.status.color)
+                .frame(width: 6)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: site.status.icon)
+                        .foregroundStyle(site.status.color)
+
+                    Text(site.name)
+                        .font(.headline)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Button(action: onToggleFavorite) {
+                        Image(systemName: isFavorite ? "star.fill" : "star")
+                            .foregroundStyle(isFavorite ? Color.yellow : Color.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isFavorite ? "Unfavorite" : "Favorite")
+                }
+
+                HStack(spacing: 8) {
+                    StatusPill(text: site.status.rawValue, tint: site.status.color)
+
+                    StatusPill(
+                        text: "LOW \(site.lowTriggered ? "TRIPPED" : "OK")",
+                        tint: site.lowTriggered ? .orange : .secondary
+                    )
+
+                    StatusPill(
+                        text: "HIGH \(site.highTriggered ? "TRIPPED" : "OK")",
+                        tint: site.highTriggered ? .red : .secondary
+                    )
+
+                    Spacer()
+
+                    // Relative timestamp reads better than absolute in a list
+                    Text(site.updatedAt, style: .relative)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 6)
     }
 }
 
+private struct StatusPill: View {
+    let text: String
+    let tint: Color
+
+    var body: some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(tint.opacity(0.15))
+            .foregroundStyle(tint)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+// MARK: - Detail View (small polish)
+
 struct SiteDetailView: View {
     let site: SiteNode
+    let isFavorite: Bool
+    let toggleFavorite: () -> Void
 
     var body: some View {
         Form {
-            Section("Status") {
-                row("State", site.status.rawValue)
-                row("Low float", site.lowTriggered ? "TRIPPED" : "OK")
-                row("High float", site.highTriggered ? "TRIPPED" : "OK")
-                row("Updated", site.updatedAt.formatted(date: .abbreviated, time: .shortened))
+            Section {
+                HStack(spacing: 10) {
+                    Image(systemName: site.status.icon)
+                        .foregroundStyle(site.status.color)
+                    Text(site.status.rawValue)
+                        .font(.headline)
+                    Spacer()
+                    Button(action: toggleFavorite) {
+                        Image(systemName: isFavorite ? "star.fill" : "star")
+                            .foregroundStyle(.yellow)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                LabeledContent("Updated") {
+                    Text(site.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Status")
             }
+
+            Section("Sensors") {
+                LabeledContent("Low float") { Text(site.lowTriggered ? "TRIPPED" : "OK").foregroundStyle(.secondary) }
+                LabeledContent("High float") { Text(site.highTriggered ? "TRIPPED" : "OK").foregroundStyle(.secondary) }
+            }
+
             Section("Location") {
                 if let lat = site.latitude, let lon = site.longitude {
-                    Text("Lat \(lat), Lon \(lon)")
+                    LabeledContent("Coordinates") {
+                        Text(String(format: "%.5f, %.5f", lat, lon)).foregroundStyle(.secondary)
+                    }
+
+                    // Quick “real app” feature: jump to Apple Maps
+                    Link("Open in Maps", destination: URL(string: "http://maps.apple.com/?ll=\(lat),\(lon)&q=\(site.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Site")")!)
                 } else {
-                    Text("No coordinates set").foregroundStyle(.secondary)
+                    Text("No coordinates set yet.")
+                        .foregroundStyle(.secondary)
                 }
             }
         }
         .navigationTitle("Detail")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Filter types + status mapping
+
+enum SiteFilter: String, CaseIterable, Identifiable {
+    case all, normal, rising, critical
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .normal: return "Normal"
+        case .rising: return "Rising"
+        case .critical: return "Critical"
+        }
+    }
+}
+
+private extension AlertStatus {
+    var color: Color {
+        switch self {
+        case .normal: return .green
+        case .rising: return .orange
+        case .critical: return .red
+        case .degraded: return .gray
+        }
     }
 
-    private func row(_ k: String, _ v: String) -> some View {
-        HStack { Text(k); Spacer(); Text(v).foregroundStyle(.secondary) }
+    var icon: String {
+        switch self {
+        case .normal: return "checkmark.circle"
+        case .rising: return "exclamationmark.triangle"
+        case .critical: return "xmark.octagon"
+        case .degraded: return "wifi.slash"
+        }
     }
 }
