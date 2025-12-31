@@ -8,17 +8,21 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var vm = SitesViewModel(repo: MockSiteRepository())
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        TabView {
+            SitesView(vm: vm)
+                .tabItem { Label("Sites", systemImage: "list.bullet.rectangle") }
+
+            SitesMapView(sites: vm.sites)
+                .tabItem { Label("Map", systemImage: "map") }
+
+            NavigationStack { AlertsView() }
+                .tabItem { Label("Alerts", systemImage: "bell") }
         }
-        .padding()
+        .task { _ = await NotificationManager.shared.requestAuth() }
     }
 }
 
-#Preview {
-    ContentView()
-}
+#Preview { ContentView() }
